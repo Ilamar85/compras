@@ -1,0 +1,58 @@
+name: Monitor precio cama CIC New Ortopedic
+
+on:
+  schedule:
+    # Cada 3 días a las 12:00 UTC (09:00 hora Chile continental aprox.)
+    - cron: "0 12 */3 * *"
+  workflow_dispatch: {}  # permite ejecutarlo manualmente desde GitHub
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  check-precio:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Ejecutar revisión de precios
+        id: revision
+        run: python scripts/check_precio.py
+
+      - name: Commit resultados
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/precios_historial.csv data/precios_latest.json
+          git diff --staged --quiet || git commit -m "Actualiza precios cama $(date -u +'%Y-%m-%d')"
+          git push
+
+      - name: Crear issue si el precio es bueno
+        if: steps.revision.outputs.buen_precio == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tienda = process.env.MEJOR_TIENDA;
+            const precio = process.env.MEJOR_PRECIO;
+            const url = process.env.MEJOR_URL;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `💰 Buen precio detectado: ${tienda} — $${precio}`,
+              body: `El precio en **${tienda}** bajó a **$${precio}**, bajo el umbral de $300.000.\n\nLink: ${url}\n\nFecha: ${new Date().toISOString()}`,
+              labels: ["precio-cama", "alerta"]
+            });
+        env:
+          MEJOR_TIENDA: ${{ steps.revision.outputs.mejor_tienda }}
+          MEJOR_PRECIO: ${{ steps.revision.outputs.mejor_precio }}
+          MEJOR_URL: ${{ steps.revision.outputs.mejor_url }}
